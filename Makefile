@@ -1,21 +1,26 @@
+
+GNOROOT ?= $(shell go mod download -x && go list -m -mod=mod -f '{{.Dir}}' github.com/gnolang/gno)
+GNOLAND_REMOTE ?= 127.0.0.1:26657
+
+gnoland_cmd := go run github.com/gnolang/gno/gno.land/cmd
+gnokey_bin := $(gnoland_cmd)/gnokey
+gnoland_bin := $(gnoland_cmd)/gonland
+faucet_bin := $(gnoland_cmd)/faucet
+
 default: help
 
-help: ## Display this help message.
-	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[0-9a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
-
-
 0_setup_gnokey: ## Add an account that will be used for Realm deployment (to gnokey).
-	printf '\n\n%s\n\n' "source bonus chronic canvas draft south burst lottery vacant surface solve popular case indicate oppose farm nothing bullet exhibit title speed wink action roast" | gnokey add --recover --insecure-password-stdin DeployKey || true
-	gnokey list | grep DeployKey
+	printf '\n\n%s\n\n' "source bonus chronic canvas draft south burst lottery vacant surface solve popular case indicate oppose farm nothing bullet exhibit title speed wink action roast" | $(gnokey_bin) add --recover --insecure-password-stdin DeployKey || true
+	$(gnokey_bin) list | grep DeployKey
 
-1_run_gnoland: ## Run the gnoland node.
+1_setup_gnoland:
 	go mod download -x
-	rm -rf .tmp/gnoland
-	mkdir -p .tmp/gnoland
-	cp -rf `go list -m -mod=mod -f '{{.Dir}}' github.com/gnolang/gno`/gno.land .tmp/gnoland/gno.land
-	cp -rf `go list -m -mod=mod -f '{{.Dir}}' github.com/gnolang/gno`/examples .tmp/gnoland/examples
+	rm -rf .tmp/gnoland && mkdir -p .tmp/gnoland
+	cp -r $(GNOROOT)/gno.land .tmp/gnoland/gno.land
+	cp -r $(GNOROOT)/examples .tmp/gnoland/examples
 	chmod -R u+w .tmp/gnoland
 	( \
+	  echo g185rxzrsc0j69amfsl255k2fxtlnt3cw8f3eu6h=10000000000ugnot # @Deploy account \
 	  echo g1plqds6kxnfaqcpky0gtt6fpntfhjgcfx8r73a0=100000000000000000ugnot; \
 	  echo g1sgy2zhqg2wecuz3qt8th63d539afagjnhs4zj3=100000000000000000ugnot; \
 	  echo g1unk9a8yt595p4yxpfpejewvf9lx6yrvd2ylgtm=100000000000000000ugnot; \
@@ -27,14 +32,16 @@ help: ## Display this help message.
 	  echo g1sl70rzvu49mp0lstxaptmvle8h2a8rx8pu56uk=100000000000000000ugnot; \
 	  echo g18dgugclk93v65qtxxus82eg30af59fgk246nqy=100000000000000000ugnot; \
 	) >> .tmp/gnoland/gno.land/genesis/genesis_balances.txt
-	ln -s `go list -m -mod=mod -f '{{.Dir}}' github.com/gnolang/gno`/gnovm .tmp/gnoland/gnovm
+	ln -s $(GNOROOT)/gnovm .tmp/gnoland/gnovm
 	#mkdir -p .tmp/gnoland/gno.land/testdir/config
 	#cp ./util/devnet/config.toml .tmp/gnoland/gno.land/testdir/config/config.toml
+
+2_run_gnoland:
 	cd .tmp/gnoland/gno.land; go run github.com/gnolang/gno/gno.land/cmd/gnoland start \
 	  -genesis-max-vm-cycles 100000000
 
-2_run_faucet: ## Run the GnoChess faucet.
-	cd faucet; go run main.go \
+3_run_faucet:
+	cd faucet; go run main.go -remote=http://$(GNOLAND_REMOTE) \
 		-fund-limit 250000000ugnot \
     -send-amount 1000000000ugnot \
     -tokens juhb8a7p1D -tokens 6wrBVqzBgQ -tokens Ko3z72NaQm -tokens 6j7v0lDR39 -tokens xqh4stG702 \
@@ -64,7 +71,7 @@ help: ## Display this help message.
     -mnemonic "piano aim fashion palace key scrap write garage avocado royal lounge lumber remove frozen sketch maze tree model half team cook burden pattern choice" \
     -num-accounts 10
 
-3_run_web: ## Run the web server.
+4_run_web: : ## Run the web server.
 	cd web; npm install
 	( \
 	  echo "VITE_GNO_WS_URL=ws://127.0.0.1:26657/websocket"; \
@@ -76,7 +83,7 @@ help: ## Display this help message.
 	cd web; npm run build
 	cd web; npm run dev
 
-4_deploy_realm: ## Deploy GnoChess realm on local node.
+5_deploy_realm: ## Deploy GnoChess realm on local node.
 	echo | gnokey maketx addpkg \
 	  --insecure-password-stdin \
 	  --gas-wanted 20000000 \
@@ -84,6 +91,7 @@ help: ## Display this help message.
 	  --pkgpath gno.land/r/demo/chess \
 	  --pkgdir ./realm \
 	  --broadcast \
+	  --remote=$(GNOLAND_REMOTE) \
 	  DeployKey
 
 z_use_local_gno: ## Use the local '../gno' directory instead of the remote 'github.com/gnolang/gno' module.
@@ -102,3 +110,9 @@ z_build_realm: ## Precompile and build the generated Go files. Assumes a working
 	cp -rf realm/*.gno ../gno/examples/gno.land/r/gnochess
 	go run github.com/gnolang/gno/gnovm/cmd/gno precompile --verbose ../gno/examples/gno.land
 	go run github.com/gnolang/gno/gnovm/cmd/gno build --verbose ../gno/examples/gno.land/r/gnochess
+
+docker-compose-dev := docker compose --project-directory=$(PWD) -f ./util/docker-compose-dev/docker-compose.yaml
+start: down; $(docker-compose-dev) up -d
+logs:; $(docker-compose-dev) logs -f setup-gnoland setup-realt faucet webui
+logs.gnoland:; $(docker-compose-dev) logs -f gnoland
+up down restart build:; $(docker-compose-dev) $@
