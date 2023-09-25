@@ -1,6 +1,6 @@
 FROM node:20-bookworm
 
-RUN apt-get update && apt-get install -y hugo dumb-init socat
+RUN apt-get update && apt-get install -y hugo dumb-init socat entr
 
 WORKDIR /app
 

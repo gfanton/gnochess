@@ -1,19 +1,24 @@
 
-GNOROOT ?= $(shell go mod download -x && go list -m -mod=mod -f '{{.Dir}}' github.com/gnolang/gno)
+GNOROOT ?= $(shell go mod download && go list -m -mod=mod -f '{{.Dir}}' github.com/gnolang/gno)
 GNOLAND_REMOTE ?= 127.0.0.1:26657
+DOCKER_WEBUI_SCALE ?= 2
 
 gnoland_cmd := go run github.com/gnolang/gno/gno.land/cmd
 gnokey_bin := $(gnoland_cmd)/gnokey
 gnoland_bin := $(gnoland_cmd)/gonland
 faucet_bin := $(gnoland_cmd)/faucet
 
+
 default: help
+
+help: ## Display this help message.
+	@awk 'BEGIN {FS = ":.*##"; printf "\nUsage:\n  make \033[36m<target>\033[0m\n"} /^[0-9a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 0_setup_gnokey: ## Add an account that will be used for Realm deployment (to gnokey).
 	printf '\n\n%s\n\n' "source bonus chronic canvas draft south burst lottery vacant surface solve popular case indicate oppose farm nothing bullet exhibit title speed wink action roast" | $(gnokey_bin) add --recover --insecure-password-stdin DeployKey || true
 	$(gnokey_bin) list | grep DeployKey
 
-1_setup_gnoland:
+1_run_gnoland: ## setup gnoland in tmp folder
 	go mod download -x
 	rm -rf .tmp/gnoland && mkdir -p .tmp/gnoland
 	cp -r $(GNOROOT)/gno.land .tmp/gnoland/gno.land
@@ -33,14 +38,14 @@ default: help
 	  echo g18dgugclk93v65qtxxus82eg30af59fgk246nqy=100000000000000000ugnot; \
 	) >> .tmp/gnoland/gno.land/genesis/genesis_balances.txt
 	ln -s $(GNOROOT)/gnovm .tmp/gnoland/gnovm
-	#mkdir -p .tmp/gnoland/gno.land/testdir/config
-	#cp ./util/devnet/config.toml .tmp/gnoland/gno.land/testdir/config/config.toml
 
-2_run_gnoland:
+	mkdir -p .tmp/gnoland/gno.land/testdir/config
+	cp ./util/devnet/config.toml .tmp/gnoland/gno.land/testdir/config/config.toml
+
 	cd .tmp/gnoland/gno.land; go run github.com/gnolang/gno/gno.land/cmd/gnoland start \
 	  -genesis-max-vm-cycles 100000000
 
-3_run_faucet:
+2_run_faucet: ## Run the GnoChess faucet.
 	cd faucet; go run main.go -remote=http://$(GNOLAND_REMOTE) \
 		-fund-limit 250000000ugnot \
     -send-amount 1000000000ugnot \
@@ -71,7 +76,7 @@ default: help
     -mnemonic "piano aim fashion palace key scrap write garage avocado royal lounge lumber remove frozen sketch maze tree model half team cook burden pattern choice" \
     -num-accounts 10
 
-4_run_web: : ## Run the web server.
+3_run_web: ## Run the web server.
 	cd web; npm install
 	( \
 	  echo "VITE_GNO_WS_URL=ws://127.0.0.1:26657/websocket"; \
@@ -83,8 +88,8 @@ default: help
 	cd web; npm run build
 	cd web; npm run dev
 
-5_deploy_realm: ## Deploy GnoChess realm on local node.
-	echo | gnokey maketx addpkg \
+4_deploy_realm: ## Deploy GnoChess realm on local node.
+	echo | $(gnokey_bin) maketx addpkg \
 	  --insecure-password-stdin \
 	  --gas-wanted 20000000 \
 	  --gas-fee 1ugnot \
@@ -112,7 +117,23 @@ z_build_realm: ## Precompile and build the generated Go files. Assumes a working
 	go run github.com/gnolang/gno/gnovm/cmd/gno build --verbose ../gno/examples/gno.land/r/gnochess
 
 docker-compose-dev := docker compose --project-directory=$(PWD) -f ./util/docker-compose-dev/docker-compose.yaml
-start: down; $(docker-compose-dev) up -d
-logs:; $(docker-compose-dev) logs -f setup-gnoland setup-realt faucet webui
-logs.gnoland:; $(docker-compose-dev) logs -f gnoland
+start: down
+	$(docker-compose-dev) up -d --scale webui-gateway=$(DOCKER_WEBUI_SCALE)
+	docker ps -f "name=webui-gateway" --format "table {{.ID}}\t{{.Names}}\t{{.Ports}}"
+scale:
+	$(docker-compose-dev) up -d --scale webui-gateway=$(DOCKER_WEBUI_SCALE) webui-gateway
+logs:
+	$(docker-compose-dev) logs -f
+restart.webui restart.faucet restart.gnoland restart.setup-realm restart.setup-gnokey:
+	$(docker-compose-dev) restart "$(patsubst restart.%,%,$@)"
+logs.webui logs.faucet logs.gnoland logs.setup-realm logs.setup-gnokey logs.webui-gateway:
+	$(docker-compose-dev) logs -f "$(patsubst logs.%,%,$@)"
+up.webui up.faucet up.gnoland up.setup-realm up.setup-gnokey up.webui-gateway:
+	$(docker-compose-dev) up -d "$(patsubst up.%,%,$@)"
+clean:
+	$(docker-compose-dev) down
+	docker volume rm gnochess_gnoconfig gnochess_goroot
+	rm -rf .tmp
+
+
 up down restart build:; $(docker-compose-dev) $@
